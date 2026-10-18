@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DrishtiPay prototype</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#FFC933">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+:root{--bg:#F4F6F8;--fg:#0F1419;--mute:#46515C;--panel:#fff;--line:#C5CCD3;--btn:#FFC933;--btnfg:#1A1200;--ok:#0B7A3B;--warn:#B45309;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0C0F13;--fg:#F4F1E8;--mute:#A9B3BD;--panel:#161B21;--line:#2C343C;--ok:#5BE08A;--warn:#FFB454}}
+:root[data-theme="dark"]{--bg:#0C0F13;--fg:#F4F1E8;--mute:#A9B3BD;--panel:#161B21;--line:#2C343C;--ok:#5BE08A;--warn:#FFB454}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:400 1.1rem/1.5 "Atkinson Hyperlegible",system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:2.2rem;line-height:1.1;margin:0 0 6px;font-weight:700}
+.sub{color:var(--mute);margin:0 0 20px;max-width:34ch}
+.stage{position:relative;width:100%;aspect-ratio:4/3;background:#000;border:2px solid var(--line);border-radius:10px;overflow:hidden}
+.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%}
+#cap{margin:14px 0;padding:14px 16px;min-height:4.2em;background:var(--panel);border:2px solid var(--line);border-radius:10px;font-size:1.5rem;line-height:1.25;font-weight:700}
+#cap.ok{border-color:var(--ok);color:var(--ok)}
+#cap.warn{border-color:var(--warn)}
+.row{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+button,select,input{font:inherit}
+button{min-height:56px;padding:0 20px;border-radius:10px;border:2px solid var(--line);background:var(--panel);color:var(--fg);font-weight:700;cursor:pointer}
+button.main{background:var(--btn);color:var(--btnfg);border-color:var(--btn);flex:1 1 180px}
+button[aria-pressed="true"]{border-color:var(--fg);box-shadow:inset 0 0 0 2px var(--fg)}
+:focus-visible{outline:3px solid var(--fg);outline-offset:3px}
+details{margin:14px 0;padding:12px 16px;background:var(--panel);border:2px solid var(--line);border-radius:10px}
+summary{cursor:pointer;font-weight:700}
+input[type=url]{width:100%;min-height:48px;margin:10px 0;padding:0 12px;border:2px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+.note{color:var(--mute);font-size:.95rem;max-width:60ch}
+#res{font-size:1.3rem;font-weight:700}
+</style>
+</head>
+<body>
+<main>
+<h1>DrishtiPay</h1>
+<p class="sub">Hold a currency note up to the camera. The phone tells you how to move it.</p>
+
+<div class="stage" id="stage"><video id="v" playsinline muted></video><canvas id="o" width="320" height="240"></canvas></div>
+<div id="cap" role="status">Press Start camera, or Try demo.</div>
+
+<div class="row">
+<button class="main" id="start">Start camera</button>
+<button class="main" id="demo">Try demo</button>
+</div>
+<div class="row" role="group" aria-label="Voice language">
+<button id="len" aria-pressed="true">English voice</button>
+<button id="lhi" aria-pressed="false">हिंदी voice (draft)</button>
+<button id="vc" aria-pressed="false">Voice commands: off</button>
+</div>
+<p id="res"></p>
+
+<details>
+<summary>Connect a trained model (optional)</summary>
+<p class="note">Train image classes in Teachable Machine, one class per note (for example “₹100”), export it as TensorFlow.js, then paste the shared model link. This works when this page is hosted on your own site (GitHub Pages or Netlify). It may be blocked here.</p>
+<input type="url" id="murl" placeholder="https://teachablemachine.withgoogle.com/models/…/" aria-label="Model link">
+<button id="mload">Load model</button>
+</details>
+
+<p class="note">Prototype. Camera frames stay in your browser and are never saved or sent. Positioning guidance is real; naming a denomination needs a trained model, and without one the page says so. It does not check whether a note is genuine. The demo mode is a simulation of the guidance, not note recognition. Voice commands use your browser’s speech recognition, which in Chrome sends audio to Google, so they need a connection.</p>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const V=$("#v"),O=$("#o"),oc=O.getContext("2d"),cap=$("#cap");
+const W=96,H=72,work=document.createElement("canvas");work.width=W;work.height=H;
+const wc=work.getContext("2d",{willReadFrequently:true});
+const TXT={
+en:{dark:"Too dark. Move to a brighter place.",none:"I cannot see a note. Hold it in front of the camera.",closer:"Bring the note closer.",back:"Move the phone back a little.",left:"Move the note to the left.",right:"Move the note to the right.",up:"Move the note up.",down:"Move the note down.",hold:"Good. Hold still.",shot:"Captured.",nomodel:"No note-recognition model is connected in this prototype, so I cannot name the note.",unsure:"I am not sure. Try again.",found:l=>"This appears to be a "+l+" note.",ready:"Camera is on. Hold a note in front of it.",demo:"Demo started. This is a simulation.",camerr:"The camera could not open. Allow camera access, or open this page directly in Chrome or Safari. You can still try the demo.",again:"Scan again"},
+hi:{dark:"रोशनी कम है। उजाले में जाइए।",none:"नोट नहीं दिख रहा। नोट को कैमरे के सामने रखिए।",closer:"नोट को पास लाइए।",back:"फ़ोन को थोड़ा पीछे कीजिए।",left:"नोट को बाईं ओर ले जाइए।",right:"नोट को दाईं ओर ले जाइए।",up:"नोट को ऊपर ले जाइए।",down:"नोट को नीचे ले जाइए।",hold:"ठीक है। स्थिर रखिए।",shot:"फ़ोटो ले ली गई।",nomodel:"इस प्रोटोटाइप में नोट पहचानने वाला मॉडल जुड़ा नहीं है, इसलिए मैं नोट का मूल्य नहीं बता सकता।",unsure:"पक्का नहीं है। फिर से कोशिश कीजिए।",found:l=>"यह "+l+" का नोट लगता है।",ready:"कैमरा चालू है। नोट को कैमरे के सामने रखिए।",demo:"डेमो शुरू हुआ। यह सिर्फ़ सिमुलेशन है।",camerr:"कैमरा नहीं खुला। कैमरे की अनुमति दीजिए।",again:"फिर से स्कैन करें"}
+};
+let lang="en",mode=null,timer=null,stream=null,model=null;
+let cur=null,cand=null,candN=0,okState=false,steady=0,prevC=null,lastSay=0,demoI=0,demoFrames=[];
+const t=k=>TXT[lang][k];
+
+function say(text){
+  setCap(text);
+  if(!("speechSynthesis" in window))return;
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text);u.lang=lang==="hi"?"hi-IN":"en-IN";u.rate=0.95;
+  speechSynthesis.speak(u);lastSay=Date.now();
+}
+function setCap(text,cls){cap.textContent=text;cap.className=cls||""}
+
+function setLang(l){lang=l;$("#len").setAttribute("aria-pressed",l==="en");$("#lhi").setAttribute("aria-pressed",l==="hi");
+  if(cur&&mode){cur=null}}
+$("#len").onclick=()=>setLang("en");$("#lhi").onclick=()=>setLang("hi");
+
+/* ---------- note detection (plain JS, no OpenCV): Otsu threshold + largest blob ---------- */
+function detect(){
+  wc.drawImage(V,0,0,W,H);
+  const d=wc.getImageData(0,0,W,H).data,n=W*H,g=new Uint8Array(n),hist=new Array(256).fill(0);
+  let sum=0;
+  for(let i=0;i<n;i++){const v=(d[4*i]*.3+d[4*i+1]*.59+d[4*i+2]*.11)|0;g[i]=v;sum+=v;hist[v]++}
+  const mean=sum/n;
+  let sB=0,wB=0,max=0,th=0;
+  for(let k=0;k<256;k++){wB+=hist[k];if(!wB)continue;const wF=n-wB;if(!wF)break;sB+=k*hist[k];
+    const mB=sB/wB,mF=(sum-sB)/wF,v=wB*wF*(mB-mF)*(mB-mF);if(v>max){max=v;th=k}}
+  let cs=0,cn=0;
+  for(let y=(H*.4)|0;y<H*.6;y++)for(let x=(W*.4)|0;x<W*.6;x++){cs+=g[y*W+x];cn++}
+  const bright=cs/cn>th,seen=new Uint8Array(n);let best=null;
+  for(let s=0;s<n;s++){
+    if(seen[s]||((g[s]>th)!==bright))continue;
+    const st=[s];seen[s]=1;let c=0,x0=W,y0=H,x1=0,y1=0;
+    while(st.length){const p=st.pop(),x=p%W,y=(p/W)|0;c++;
+      if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      for(const q of [p-1,p+1,p-W,p+W]){
+        if(q<0||q>=n||seen[q])continue;
+        if((q===p-1&&x===0)||(q===p+1&&x===W-1))continue;
+        if((g[q]>th)===bright){seen[q]=1;st.push(q)}}}
+    if(!best||c>best.c)best={c,x0,y0,x1,y1};
+  }
+  if(!best||best.c<n*.03||best.c>n*.92)return{box:null,bright:mean};
+  return{box:[best.x0/W,best.y0/H,(best.x1+1)/W,(best.y1+1)/H],bright:mean};
+}
+
+/* ---------- guidance engine: one correction at a time ---------- */
+function guide(box,bright){
+  if(bright<45)return{key:"dark"};
+  if(!box)return{key:"none"};
+  const w=box[2]-box[0],h=box[3]-box[1],area=w*h,cx=(box[0]+box[2])/2,cy=(box[1]+box[3])/2;
+  const edge=box[0]<=.01||box[1]<=.01||box[2]>=.99||box[3]>=.99;
+  if(area<.15)return{key:"closer"};
+  if(area>.7||(edge&&area>.3))return{key:"back"};
+  const tol=okState?.18:.12;               // hysteresis: harder to leave "ok" than to enter it
+  if(cx-.5>tol)return{key:"left"};          // note appears right of centre: move it left
+  if(cx-.5<-tol)return{key:"right"};
+  if(cy-.5>tol)return{key:"up"};
+  if(cy-.5<-tol)return{key:"down"};
+  return{key:"hold",ok:true,c:[cx,cy]};
+}
+
+function step(box,bright){
+  const g=guide(box,bright);okState=!!g.ok;
+  draw(box,g.ok);
+  if(g.key===cand)candN++;else{cand=g.key;candN=1}            // debounce: 3 matching frames
+  const now=Date.now();
+  if(candN>=3&&cand!==cur&&now-lastSay>1800){cur=cand;say(t(cur));cap.className=g.ok?"ok":"warn"}
+  else if(candN>=3&&cand===cur&&cur!=="hold"&&now-lastSay>6000){say(t(cur));cap.className="warn"}  // speech cooldown
+  if(g.ok){
+    if(prevC&&Math.hypot(g.c[0]-prevC[0],g.c[1]-prevC[1])<.03)steady++;else steady=prevC?0:1;
+    prevC=g.c;if(steady>=5)capture();
+  }else{steady=0;prevC=null}
+}
+
+function draw(box,ok){
+  oc.clearRect(0,0,320,240);
+  if(mode==="demo"){oc.fillStyle="#111";oc.fillRect(0,0,320,240)}
+  oc.strokeStyle="rgba(255,255,255,.35)";oc.lineWidth=1;
+  for(let i=1;i<3;i++){oc.beginPath();oc.moveTo(i*320/3,0);oc.lineTo(i*320/3,240);oc.moveTo(0,i*80);oc.lineTo(320,i*80);oc.stroke()}
+  if(box){
+    const x=box[0]*320,y=box[1]*240,w=(box[2]-box[0])*320,h=(box[3]-box[1])*240;
+    if(mode==="demo"){oc.fillStyle="rgba(120,200,140,.55)";oc.fillRect(x,y,w,h)}
+    oc.strokeStyle=ok?"#5BE08A":"#FFC933";oc.lineWidth=4;oc.strokeRect(x,y,w,h);
+  }
+}
+
+/* ---------- capture and result ---------- */
+async function capture(){
+  const m=mode;stopLoop();
+  const c=document.createElement("canvas");
+  if(m==="camera"&&V.videoWidth){c.width=V.videoWidth;c.height=V.videoHeight;c.getContext("2d").drawImage(V,0,0)}
+  say(t("shot"));
+  let msg=t("nomodel");
+  if(m==="camera"&&model){
+    try{
+      const p=await model.predict(c);p.sort((a,b)=>b.probability-a.probability);
+      msg=p[0].probability>=.85?t("found")(p[0].className):t("unsure");
+    }catch(e){msg=t("unsure")}
+  }
+  setTimeout(()=>{say(msg);$("#res").textContent=msg;$("#start").textContent=t("again");cap.className=""},1200);
+}
+
+/* ---------- loop control ---------- */
+function resetState(){cur=cand=null;candN=0;okState=false;steady=0;prevC=null;lastSay=0;$("#res").textContent=""}
+function stopLoop(){clearInterval(timer);timer=null}
+function stopAll(){stopLoop();if(stream){stream.getTracks().forEach(x=>x.stop());stream=null}V.srcObject=null;mode=null;speechSynthesis.cancel()}
+
+$("#start").onclick=async()=>{
+  if(mode==="camera"&&timer){stopAll();setCap("Stopped. Press Start camera.");$("#start").textContent="Start camera";return}
+  stopAll();resetState();
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:640}},audio:false});
+    V.srcObject=stream;await V.play();
+    $("#stage").style.aspectRatio=(V.videoWidth||4)+"/"+(V.videoHeight||3);
+    O.height=Math.round(320*(V.videoHeight||3)/(V.videoWidth||4));
+    mode="camera";$("#start").textContent="Stop";say(t("ready"));
+    timer=setInterval(()=>{const r=detect();step(r.box,r.bright)},125);   // about 8 frames per second
+  }catch(e){mode=null;setCap(t("camerr"),"warn");try{speechSynthesis.speak(new SpeechSynthesisUtterance(t("camerr")))}catch(_){}}
+};
+
+function buildDemo(){
+  const f=[];const lerp=(a,b,k)=>a+(b-a)*k;
+  for(let i=0;i<10;i++)f.push({box:null,b:120});
+  for(let i=0;i<8;i++)f.push({box:[.02,.1,.2,.28],b:120});                  // small, far left, high
+  for(let i=0;i<30;i++){const k=i/29;f.push({box:[lerp(.02,.2,k),lerp(.1,.18,k),lerp(.2,.8,k),lerp(.28,.82,k)],b:120})}
+  for(let i=0;i<12;i++)f.push({box:[.2,.18,.8,.82],b:120});                 // centred and still
+  return f;
+}
+$("#demo").onclick=()=>{
+  stopAll();resetState();mode="demo";V.style.display="none";$("#stage").style.aspectRatio="4/3";O.height=240;
+  demoFrames=buildDemo();demoI=0;$("#start").textContent="Start camera";say(t("demo"));
+  timer=setInterval(()=>{const f=demoFrames[Math.min(demoI++,demoFrames.length-1)];step(f.box,f.b)},125);
+};
+$("#start").addEventListener("click",()=>{V.style.display="block"},true);
+
+/* ---------- voice commands + offline shell ---------- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null,listening=false;
+function handleCmd(s){
+  s=s.toLowerCase();
+  if(/stop|रुक|बंद/.test(s)){stopAll();setCap("Stopped.");$("#start").textContent="Start camera"}
+  else if(/demo|डेमो/.test(s))$("#demo").click();
+  else if(/hindi|हिंदी|हिन्दी/.test(s))setLang("hi");
+  else if(/english|अंग्रेज/.test(s))setLang("en");
+  else if(/start|scan|स्टार्ट|स्कैन|शुरू/.test(s)){if(!(mode==="camera"&&timer))$("#start").click()}
+}
+$("#vc").onclick=()=>{
+  const b=$("#vc");
+  if(!SR){setCap("Voice commands are not supported in this browser. Try Chrome on Android.","warn");return}
+  if(listening){listening=false;try{rec.stop()}catch(_){}b.textContent="Voice commands: off";b.setAttribute("aria-pressed","false");return}
+  rec=new SR();rec.continuous=true;rec.interimResults=false;rec.lang=lang==="hi"?"hi-IN":"en-IN";
+  rec.onresult=e=>{if(speechSynthesis.speaking||Date.now()-lastSay<2500)return;handleCmd(e.results[e.results.length-1][0].transcript)};
+  rec.onend=()=>{if(listening)try{rec.start()}catch(_){}};
+  rec.onerror=ev=>{if(ev.error==="not-allowed"||ev.error==="service-not-allowed"){listening=false;b.textContent="Voice commands: off";b.setAttribute("aria-pressed","false");setCap("Microphone access was blocked, so voice commands are off.","warn")}};
+  try{rec.start();listening=true;b.textContent="Voice commands: on";b.setAttribute("aria-pressed","true");
+    say(lang==="hi"?"आवाज़ आदेश चालू। स्टार्ट, स्टॉप या डेमो बोलिए।":"Voice commands on. Say start, stop or demo.")}catch(_){}
+};
+if("serviceWorker" in navigator&&location.protocol==="https:"){try{navigator.serviceWorker.register("sw.js").catch(()=>{})}catch(_){}}
+
+/* ---------- optional Teachable Machine model ---------- */
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+$("#mload").onclick=async()=>{
+  const u=$("#murl").value.trim();if(!u)return;
+  const base=u.endsWith("/")?u:u+"/";
+  try{
+    setCap("Loading model…");
+    await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js");
+    await loadScript("https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js");
+    model=await tmImage.load(base+"model.json",base+"metadata.json");
+    setCap("Model loaded. Start the camera.");
+  }catch(e){model=null;setCap("The model could not load. Host this page on your own site and check the link.","warn")}
+};
+</script>
+</body>
+</html>
